@@ -68,6 +68,7 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   padding: 10px 16px;
 }
 .top h1 { font-size: 1.25rem; margin: 0; letter-spacing: .02em; }
+.ver { font-size: .65rem; font-weight: 500; color: var(--muted); vertical-align: middle; }
 .round { color: var(--muted); font-size: .9rem; font-variant-numeric: tabular-nums; }
 .ghost {
   margin-left: auto;

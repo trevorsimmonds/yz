@@ -1,5 +1,5 @@
-// Bump the version whenever you change any file so phones pick up the update.
-const CACHE = 'yahtzee-v2';
+// Bump the version whenever you change any file (and the label in index.html).
+const CACHE = 'yahtzee-v3';
 const ASSETS = [
   './',
   './index.html',
@@ -23,13 +23,23 @@ self.addEventListener('activate', e => {
   );
 });
 
+// Network first (so updates show up straight away), cache when offline or slow.
 self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET') return;
-  e.respondWith(
-    caches.match(e.request, { ignoreSearch: true }).then(hit =>
-      hit || fetch(e.request).catch(() =>
-        e.request.mode === 'navigate' ? caches.match('./index.html') : undefined
-      )
-    )
-  );
+  const req = e.request;
+  if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
+  e.respondWith((async () => {
+    const cache = await caches.open(CACHE);
+    const timeout = new Promise(resolve => setTimeout(resolve, 3000));
+    const network = fetch(req, { cache: 'no-cache' }).then(res => {
+      if (res.ok) cache.put(req, res.clone());
+      return res;
+    });
+    try {
+      const res = await Promise.race([network, timeout]);
+      if (res) return res;
+    } catch (_) { /* offline */ }
+    const hit = await cache.match(req, { ignoreSearch: true }) ||
+      (req.mode === 'navigate' ? await cache.match('./index.html') : undefined);
+    return hit || network;
+  })());
 });
