@@ -1,5 +1,5 @@
 // Bump the version whenever you change any file so phones pick up the update.
-const CACHE = 'yahtzee-v1';
+const CACHE = 'yahtzee-v2';
 const ASSETS = [
   './',
   './index.html',

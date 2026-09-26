@@ -79,8 +79,101 @@ function totals(scores, yahtzeeBonuses) {
   return { upper, upperBonus, lower, yb, grand: upper + upperBonus + lower + yb };
 }
 
+/* =========================================================
+   Luck engine — quietly tilts rolls in the player's favour.
+   1. Magnet: free dice lean toward faces that help what you're holding
+      (more of a held face, or the missing faces of a straight).
+   2. Pity meter (pseudo-random distribution): bad turns fill a hidden
+      meter; while it's charged, rolls are "best of N" behind the scenes.
+      A good turn drains it.
+   ========================================================= */
+const LUCK = {
+  magnet: 0.25,      // extra weight for helpful faces (0 = fair dice)
+  pityStep: 0.3,     // meter gain after a bad turn
+  pityBase: 0.15,    // chance of a best-of-N roll even with an empty meter
+  bestOf: 2,         // candidates considered on a pity roll
+};
+// Typical score per category, used to judge "good" vs "bad" turns.
+const PAR = {
+  ones: 2, twos: 5, threes: 8, fours: 11, fives: 14, sixes: 17,
+  threeKind: 20, fourKind: 13, fullHouse: 18, smStraight: 22, lgStraight: 18,
+  yahtzee: 15, chance: 22,
+};
+const newLuck = () => ({ pity: 0 });
+
+function faceWeights(dice, held, scores, magnet) {
+  const w = [0, 1, 1, 1, 1, 1, 1];
+  const hv = dice.filter((_, i) => held[i]);
+  if (!hv.length || magnet <= 0) return w;
+  const hc = counts(hv);
+  const s = [0, 0, 0, 0, 0, 0, 0];
+  const kindOpen = scores.threeKind === null || scores.fourKind === null ||
+    scores.yahtzee === null || scores.yahtzee === 50 || scores.fullHouse === null;
+  // More of the same face
+  for (let f = 1; f <= 6; f++) {
+    if (!hc[f]) continue;
+    if (kindOpen || scores[UPPER_KEYS[f - 1]] === null) s[f] += hc[f] / hv.length;
+  }
+  // Straights: held faces all distinct and part of an open straight
+  const distinct = new Set(hv);
+  if (distinct.size === hv.length && hv.length >= 2) {
+    const runs = [];
+    if (scores.lgStraight === null) runs.push([1, 2, 3, 4, 5], [2, 3, 4, 5, 6]);
+    if (scores.smStraight === null) runs.push([1, 2, 3, 4], [2, 3, 4, 5], [3, 4, 5, 6]);
+    const fits = runs.filter(r => hv.every(v => r.includes(v)));
+    fits.forEach(r => r.forEach(f => { if (!distinct.has(f)) s[f] += 1 / fits.length; }));
+    if (fits.length) for (const f of distinct) s[f] *= 0.2;  // don't pull toward duplicates
+  }
+  const max = Math.max(...s);
+  if (max > 0) for (let f = 1; f <= 6; f++) w[f] = 1 + magnet * (s[f] / max);
+  return w;
+}
+
+function drawFace(w, rng) {
+  let t = rng() * (w[1] + w[2] + w[3] + w[4] + w[5] + w[6]);
+  for (let f = 1; f <= 6; f++) { t -= w[f]; if (t < 0) return f; }
+  return 6;
+}
+
+// How attractive a set of dice is, given open categories.
+function rollValue(d, scores) {
+  const c = counts(d);
+  const max = Math.max(...c);
+  let best = 0;
+  for (const k of allowedCategories(scores, d)) best = Math.max(best, scoreFor(k, d, scores) - PAR[k]);
+  let potential = (max - 1) * 6;
+  if (scores.lgStraight === null || scores.smStraight === null) {
+    for (let n = 5; n >= 3; n--) if (hasRun(d, n)) { potential = Math.max(potential, (n - 2) * 8); break; }
+  }
+  if (isYahtzee(d) && (scores.yahtzee === null || scores.yahtzee === 50)) best += 60;
+  return best + potential;
+}
+
+function luckyRoll(dice, held, scores, luck, rng = Math.random, cfg = LUCK) {
+  const w = faceWeights(dice, held, scores, cfg.magnet);
+  const once = () => dice.map((v, i) => held[i] ? v : drawFace(w, rng));
+  const pity = Math.min(1, cfg.pityBase + luck.pity);
+  if (cfg.bestOf < 2 || rng() >= pity) return once();
+  let best = once(), bestV = rollValue(best, scores);
+  for (let n = 1; n < cfg.bestOf; n++) {
+    const cand = once(), v = rollValue(cand, scores);
+    if (v > bestV) { best = cand; bestV = v; }
+  }
+  return best;
+}
+
+// Call after a turn is scored.
+function updateLuck(luck, cat, score, cfg = LUCK) {
+  const good = score >= PAR[cat] + 3 || cat === 'yahtzee' && score === 50;
+  const bad = score === 0 || score < PAR[cat] - 2;
+  if (good) luck.pity = 0;
+  else if (bad) luck.pity = Math.min(1, luck.pity + cfg.pityStep);
+  return luck;
+}
+
 if (typeof module !== 'undefined') {
-  module.exports = { baseScore, scoreFor, allowedCategories, jokerActive, earnsYahtzeeBonus, totals, ALL_KEYS };
+  module.exports = { baseScore, scoreFor, allowedCategories, jokerActive, earnsYahtzeeBonus, totals, ALL_KEYS,
+    UPPER_KEYS, LOWER_KEYS, PAR, LUCK, newLuck, faceWeights, luckyRoll, updateLuck, counts, hasRun, isYahtzee };
 }
 
 /* =========================================================
@@ -102,6 +195,7 @@ if (typeof document !== 'undefined') (function () {
       round: 1,
       scores: Object.fromEntries(ALL_KEYS.map(k => [k, null])),
       yahtzeeBonuses: 0,
+      luck: newLuck(),
     };
   }
   const clone = o => JSON.parse(JSON.stringify(o));
@@ -166,7 +260,7 @@ if (typeof document !== 'undefined') (function () {
     if (state.held.every(Boolean)) return;
     undoSnap = null;
     lastScored = null;
-    const final = state.dice.map((v, i) => state.held[i] ? v : 1 + Math.floor(Math.random() * 6));
+    const final = luckyRoll(state.dice, state.held, state.scores, state.luck);
     state.rollsLeft--;
     state.rolled = true;
 
@@ -194,6 +288,7 @@ if (typeof document !== 'undefined') (function () {
     undoSnap = clone(state);
     if (earnsYahtzeeBonus(state.scores, state.dice)) state.yahtzeeBonuses++;
     state.scores[cat] = scoreFor(cat, state.dice, state.scores);
+    updateLuck(state.luck, cat, state.scores[cat]);
     lastScored = cat;
     state.round++;
     state.rollsLeft = 3;
