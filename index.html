@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Yahtzee</title>
+  <meta name="description" content="Single-player Yahtzee that works offline.">
+  <meta name="theme-color" content="#1f5d45">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <h1>Yahtzee</h1>
+      <div class="round" id="round">Round 1 / 13</div>
+      <button type="button" class="ghost" id="newGame">New game</button>
+    </header>
+
+    <main class="board">
+      <section class="card" id="scorecard" aria-label="Scorecard">
+        <div class="col" id="upperCol">
+          <h2>Upper</h2>
+        </div>
+        <div class="col" id="lowerCol">
+          <h2>Lower</h2>
+        </div>
+        <div class="grand">
+          <span>Total</span>
+          <strong id="grand">0</strong>
+        </div>
+      </section>
+
+      <section class="play" aria-label="Dice">
+        <p class="status" id="status" aria-live="polite"></p>
+        <div class="dice" id="dice"></div>
+        <div class="actions">
+          <button type="button" class="secondary" id="undo" hidden>Undo</button>
+          <button type="button" class="primary" id="roll">Roll</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="overlay" id="gameOver" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="goTitle">
+      <h2 id="goTitle">Game over</h2>
+      <div class="final" id="finalScore">0</div>
+      <dl class="breakdown">
+        <dt>Upper section</dt><dd id="bdUpper">0</dd>
+        <dt>Upper bonus</dt><dd id="bdBonus">0</dd>
+        <dt>Lower section</dt><dd id="bdLower">0</dd>
+        <dt>Yahtzee bonus</dt><dd id="bdYB">0</dd>
+      </dl>
+      <div class="actions">
+        <button type="button" class="secondary" id="goUndo">Undo last move</button>
+        <button type="button" class="primary" id="goNew">New game</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
