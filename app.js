@@ -230,10 +230,19 @@ function suggestHold(dice, scores) {
   return dice.map(v => v === bestFace);
 }
 
+// Carries a hold choice forward across a roll: anything already held stays
+// held (its value can't have changed), and the fresh suggestion only adds
+// picks among the dice that were just rerolled. It never un-holds a die
+// the player (or an earlier suggestion) already chose to keep.
+function nextHeld(prevHeld, dice, scores) {
+  const suggestion = suggestHold(dice, scores);
+  return prevHeld.map((held, i) => held || suggestion[i]);
+}
+
 if (typeof module !== 'undefined') {
   module.exports = { baseScore, scoreFor, allowedCategories, jokerActive, earnsYahtzeeBonus, totals, ALL_KEYS,
     UPPER_KEYS, LOWER_KEYS, PAR, LUCK, newLuck, faceWeights, luckyRoll, updateLuck, counts, hasRun, isYahtzee,
-    suggestHold };
+    suggestHold, nextHeld };
 }
 
 /* =========================================================
@@ -353,13 +362,14 @@ if (typeof document !== 'undefined') (function () {
     if (state.held.every(Boolean)) return;
     undoSnap = null;
     lastScored = null;
+    const prevHeld = state.held.slice();
     const final = luckyRoll(state.dice, state.held, state.scores, state.luck);
     state.rollsLeft--;
     state.rolled = true;
 
     if (reduceMotion) {
       state.dice = final;
-      state.held = state.rollsLeft > 0 ? suggestHold(final, state.scores) : [false, false, false, false, false];
+      state.held = state.rollsLeft > 0 ? nextHeld(prevHeld, final, state.scores) : [false, false, false, false, false];
       render();
       if (isYahtzee(final)) celebrate(false);
       return;
@@ -385,7 +395,7 @@ if (typeof document !== 'undefined') (function () {
       clearInterval(flicker);
       moving.forEach(i => dieEls[i].classList.remove('rolling'));
       state.dice = final;
-      state.held = state.rollsLeft > 0 ? suggestHold(final, state.scores) : [false, false, false, false, false];
+      state.held = state.rollsLeft > 0 ? nextHeld(prevHeld, final, state.scores) : [false, false, false, false, false];
       rolling = false;
       render();
       if (isYahtzee(final) && (state.scores.yahtzee === null || state.scores.yahtzee === 50)) celebrate(state.scores.yahtzee === 50);
