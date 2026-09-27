@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Yahtzee</title>
   <meta name="description" content="Single-player Yahtzee that works offline.">
-  <meta name="theme-color" content="#1f5d45">
+  <meta name="theme-color" content="#22684d">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -14,8 +14,22 @@
 <body>
   <div class="app">
     <header class="top">
-      <h1>Yahtzee <span class="ver">v3</span></h1>
+      <h1>
+        <svg class="logo" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <rect x="2" y="2" width="20" height="20" rx="6" fill="var(--accent)"/>
+          <circle cx="8" cy="8" r="1.8" fill="var(--accent-ink)"/>
+          <circle cx="16" cy="8" r="1.8" fill="var(--accent-ink)"/>
+          <circle cx="12" cy="12" r="1.8" fill="var(--accent-ink)"/>
+          <circle cx="8" cy="16" r="1.8" fill="var(--accent-ink)"/>
+          <circle cx="16" cy="16" r="1.8" fill="var(--accent-ink)"/>
+        </svg>
+        Yahtzee <span class="ver">v4</span>
+      </h1>
       <div class="round" id="round">Round 1 / 13</div>
+      <div class="spacer"></div>
+      <button type="button" class="ghost icon-btn" id="themeBtn" aria-label="Themes" title="Themes">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="7.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="16.5" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="16.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="7.5" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg>
+      </button>
       <button type="button" class="ghost" id="newGame">New game</button>
     </header>
 
@@ -48,6 +62,7 @@
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="goTitle">
       <h2 id="goTitle">Game over</h2>
       <div class="final" id="finalScore">0</div>
+      <p class="verdict" id="verdict"></p>
       <dl class="breakdown">
         <dt>Upper section</dt><dd id="bdUpper">0</dd>
         <dt>Upper bonus</dt><dd id="bdBonus">0</dd>
@@ -60,6 +75,19 @@
       </div>
     </div>
   </div>
+
+  <div class="overlay" id="themePicker" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="themeTitle">
+      <h2 id="themeTitle">Theme</h2>
+      <div class="themes" id="themeGrid"></div>
+      <div class="actions">
+        <button type="button" class="primary" id="themeClose">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <canvas id="confetti" hidden></canvas>
+  <div id="bannerHost"></div>
 
   <script src="app.js"></script>
 </body>

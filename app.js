@@ -86,12 +86,17 @@ function totals(scores, yahtzeeBonuses) {
    2. Pity meter (pseudo-random distribution): bad turns fill a hidden
       meter; while it's charged, rolls are "best of N" behind the scenes.
       A good turn drains it.
+   3. Drought protection: if you've gone `droughtStart` turns without a
+      Yahtzee, each further turn pulls harder toward matching dice.
    ========================================================= */
 const LUCK = {
   magnet: 0.25,      // extra weight for helpful faces (0 = fair dice)
   pityStep: 0.3,     // meter gain after a bad turn
   pityBase: 0.15,    // chance of a best-of-N roll even with an empty meter
   bestOf: 2,         // candidates considered on a pity roll
+  droughtStart: 7,   // turns without a Yahtzee before drought help kicks in (i.e. from round 8)
+  droughtMagnet: 0.3,// extra pull toward held matching dice, per drought turn
+  droughtPity: 0.2,  // extra best-of-N chance, per drought turn
 };
 // Typical score per category, used to judge "good" vs "bad" turns.
 const PAR = {
@@ -99,12 +104,12 @@ const PAR = {
   threeKind: 20, fourKind: 13, fullHouse: 18, smStraight: 22, lgStraight: 18,
   yahtzee: 15, chance: 22,
 };
-const newLuck = () => ({ pity: 0 });
+const newLuck = () => ({ pity: 0, dry: 0 });
 
-function faceWeights(dice, held, scores, magnet) {
+function faceWeights(dice, held, scores, magnet, kindExtra = 0) {
   const w = [0, 1, 1, 1, 1, 1, 1];
   const hv = dice.filter((_, i) => held[i]);
-  if (!hv.length || magnet <= 0) return w;
+  if (!hv.length || (magnet <= 0 && kindExtra <= 0)) return w;
   const hc = counts(hv);
   const s = [0, 0, 0, 0, 0, 0, 0];
   const kindOpen = scores.threeKind === null || scores.fourKind === null ||
@@ -126,6 +131,11 @@ function faceWeights(dice, held, scores, magnet) {
   }
   const max = Math.max(...s);
   if (max > 0) for (let f = 1; f <= 6; f++) w[f] = 1 + magnet * (s[f] / max);
+  // Drought: pull toward the most-held face (not for straight holds)
+  const topHeld = Math.max(...hc);
+  if (kindExtra > 0 && (topHeld >= 2 || hv.length === 1)) {
+    for (let f = 1; f <= 6; f++) if (hc[f] === topHeld) w[f] += kindExtra;
+  }
   return w;
 }
 
@@ -136,7 +146,7 @@ function drawFace(w, rng) {
 }
 
 // How attractive a set of dice is, given open categories.
-function rollValue(d, scores) {
+function rollValue(d, scores, drought = 0) {
   const c = counts(d);
   const max = Math.max(...c);
   let best = 0;
@@ -146,24 +156,29 @@ function rollValue(d, scores) {
     for (let n = 5; n >= 3; n--) if (hasRun(d, n)) { potential = Math.max(potential, (n - 2) * 8); break; }
   }
   if (isYahtzee(d) && (scores.yahtzee === null || scores.yahtzee === 50)) best += 60;
-  return best + potential;
+  return best + potential + drought * max * 4;
 }
 
+const droughtLevel = (luck, scores, cfg) =>
+  scores.yahtzee === 0 ? 0 : Math.max(0, (luck.dry || 0) - cfg.droughtStart + 1);
+
 function luckyRoll(dice, held, scores, luck, rng = Math.random, cfg = LUCK) {
-  const w = faceWeights(dice, held, scores, cfg.magnet);
+  const dl = droughtLevel(luck, scores, cfg);
+  const w = faceWeights(dice, held, scores, cfg.magnet, dl * (cfg.droughtMagnet || 0));
   const once = () => dice.map((v, i) => held[i] ? v : drawFace(w, rng));
-  const pity = Math.min(1, cfg.pityBase + luck.pity);
+  const pity = Math.min(1, cfg.pityBase + luck.pity + dl * (cfg.droughtPity || 0));
   if (cfg.bestOf < 2 || rng() >= pity) return once();
-  let best = once(), bestV = rollValue(best, scores);
+  let best = once(), bestV = rollValue(best, scores, dl);
   for (let n = 1; n < cfg.bestOf; n++) {
-    const cand = once(), v = rollValue(cand, scores);
+    const cand = once(), v = rollValue(cand, scores, dl);
     if (v > bestV) { best = cand; bestV = v; }
   }
   return best;
 }
 
 // Call after a turn is scored.
-function updateLuck(luck, cat, score, cfg = LUCK) {
+function updateLuck(luck, cat, score, dice, cfg = LUCK) {
+  luck.dry = isYahtzee(dice) ? 0 : (luck.dry || 0) + 1;
   const good = score >= PAR[cat] + 3 || cat === 'yahtzee' && score === 50;
   const bad = score === 0 || score < PAR[cat] - 2;
   if (good) luck.pity = 0;
@@ -223,10 +238,43 @@ if (typeof document !== 'undefined') (function () {
   UPPER.forEach(([k, l]) => upperCol.appendChild(makeRow(k, l)));
   upperCol.appendChild(Object.assign(document.createElement('div'), { className: 'sep' }));
   upperCol.appendChild(makeSub('upperSum', 'Subtotal'));
+  const progress = Object.assign(document.createElement('div'), { className: 'progress' });
+  progress.innerHTML = '<i id="upperBar"></i>';
+  upperCol.appendChild(progress);
   upperCol.appendChild(makeSub('upperBonus', 'Bonus (63+)'));
   LOWER.forEach(([k, l]) => lowerCol.appendChild(makeRow(k, l)));
   lowerCol.appendChild(Object.assign(document.createElement('div'), { className: 'sep' }));
   lowerCol.appendChild(makeSub('yBonus', 'Yahtzee bonus'));
+
+  /* ---------- Themes ---------- */
+  const THEMES = [
+    { id: 'classic', name: 'Classic', felt: '#22684d', accent: '#eab03a' },
+    { id: 'midnight', name: 'Midnight', felt: '#2b2170', accent: '#3ee6ff' },
+    { id: 'ocean', name: 'Ocean', felt: '#117093', accent: '#ff9f59' },
+    { id: 'sunset', name: 'Sunset', felt: '#8a3358', accent: '#ffa24c' },
+  ];
+  let theme = 'classic';
+  try { theme = localStorage.getItem('yz-theme') || 'classic'; } catch (_) {}
+  function applyTheme(id) {
+    theme = id;
+    document.documentElement.dataset.theme = id;
+    try { localStorage.setItem('yz-theme', id); } catch (_) {}
+    themeGrid.querySelectorAll('.swatch').forEach(s => s.setAttribute('aria-pressed', String(s.dataset.id === id)));
+  }
+  const themeGrid = $('themeGrid');
+  THEMES.forEach(t => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'swatch';
+    b.dataset.id = t.id;
+    b.innerHTML = `<span class="mini" style="background:${t.felt}"><b style="background:${t.accent}"></b></span>${t.name}`;
+    b.addEventListener('click', () => applyTheme(t.id));
+    themeGrid.appendChild(b);
+  });
+  applyTheme(theme);
+  $('themeBtn').addEventListener('click', () => { $('themePicker').hidden = false; });
+  $('themeClose').addEventListener('click', () => { $('themePicker').hidden = true; });
+  $('themePicker').addEventListener('click', e => { if (e.target.id === 'themePicker') $('themePicker').hidden = true; });
 
   const diceEl = $('dice');
   const dieEls = [];
@@ -264,22 +312,104 @@ if (typeof document !== 'undefined') (function () {
     state.rollsLeft--;
     state.rolled = true;
 
-    if (reduceMotion) { state.dice = final; render(); return; }
+    if (reduceMotion) {
+      state.dice = final;
+      render();
+      if (isYahtzee(final)) celebrate(false);
+      return;
+    }
 
     rolling = true;
     const moving = [0, 1, 2, 3, 4].filter(i => !state.held[i]);
-    moving.forEach(i => { dieEls[i].classList.remove('rolling'); void dieEls[i].offsetWidth; dieEls[i].classList.add('rolling'); });
+    const DUR = 460, STAGGER = 55;
+    moving.forEach((i, n) => {
+      const el = dieEls[i];
+      el.classList.remove('rolling');
+      void el.offsetWidth;
+      el.style.setProperty('--dur', DUR + 'ms');
+      el.style.setProperty('--delay', (n * STAGGER) + 'ms');
+      el.classList.add('rolling');
+    });
     render();
     const flicker = setInterval(() => {
       moving.forEach(i => drawDie(i, 1 + Math.floor(Math.random() * 6)));
     }, 70);
+    const total = DUR + (moving.length - 1) * STAGGER;
     setTimeout(() => {
       clearInterval(flicker);
       moving.forEach(i => dieEls[i].classList.remove('rolling'));
       state.dice = final;
       rolling = false;
       render();
-    }, 480);
+      if (isYahtzee(final) && (state.scores.yahtzee === null || state.scores.yahtzee === 50)) celebrate(state.scores.yahtzee === 50);
+    }, total);
+  }
+
+  /* ---------- Celebration ---------- */
+  const canvas = $('confetti'), ctx = canvas.getContext ? canvas.getContext('2d') : null;
+  function celebrate(bonus) {
+    if (reduceMotion) return;
+    const host = $('bannerHost');
+    const banner = document.createElement('div');
+    banner.className = 'banner';
+    banner.innerHTML = bonus
+      ? '<span>YAHTZEE!<small>+100 bonus</small></span>'
+      : '<span>YAHTZEE!</span>';
+    host.appendChild(banner);
+    setTimeout(() => banner.remove(), 1650);
+    dieEls.forEach(el => { el.classList.remove('yz'); void el.offsetWidth; el.classList.add('yz'); });
+    if (!ctx) return;
+    canvas.hidden = false;
+    canvas.width = innerWidth; canvas.height = innerHeight;
+    const cs = getComputedStyle(document.documentElement).getPropertyValue('--confetti');
+    const colors = cs.split(',').map(s => s.trim()).filter(Boolean);
+    const count = bonus ? 160 : 100;
+    const pieces = Array.from({ length: count }, () => ({
+      x: innerWidth / 2 + (Math.random() - 0.5) * 80,
+      y: innerHeight * 0.3,
+      vx: (Math.random() - 0.5) * 9,
+      vy: -Math.random() * 10 - 4,
+      s: Math.random() * 6 + 4,
+      rot: Math.random() * Math.PI,
+      vr: (Math.random() - 0.5) * 0.3,
+      c: colors[Math.floor(Math.random() * colors.length)],
+    }));
+    const start = performance.now();
+    function tick(now) {
+      const dt = Math.min(32, now - (tick.last || now)); tick.last = now;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      let alive = false;
+      for (const p of pieces) {
+        p.vy += 0.028 * dt;
+        p.x += p.vx * (dt / 16); p.y += p.vy * (dt / 16); p.rot += p.vr;
+        if (p.y < canvas.height + 20) alive = true;
+        ctx.save();
+        ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+        ctx.fillStyle = p.c;
+        ctx.fillRect(-p.s / 2, -p.s / 3, p.s, p.s * 0.6);
+        ctx.restore();
+      }
+      if (alive && now - start < 2600) requestAnimationFrame(tick);
+      else { ctx.clearRect(0, 0, canvas.width, canvas.height); canvas.hidden = true; }
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function scorePop(cat, value) {
+    if (reduceMotion || value <= 0) return;
+    const from = diceEl.getBoundingClientRect();
+    const to = rowEls[cat].querySelector('.val').getBoundingClientRect();
+    const pop = document.createElement('div');
+    pop.className = 'pop';
+    pop.textContent = '+' + value;
+    pop.style.left = (from.left + from.width / 2) + 'px';
+    pop.style.top = (from.top + from.height / 2) + 'px';
+    document.body.appendChild(pop);
+    pop.animate(
+      [{ left: pop.style.left, top: pop.style.top }, { left: (to.left + to.width / 2) + 'px', top: (to.top) + 'px' }],
+      { duration: 620, easing: 'cubic-bezier(.3,.6,.3,1)', fill: 'forwards' }
+    );
+    setTimeout(() => pop.remove(), 900);
   }
 
   function pick(cat) {
@@ -287,8 +417,10 @@ if (typeof document !== 'undefined') (function () {
     if (!allowedCategories(state.scores, state.dice).includes(cat)) return;
     undoSnap = clone(state);
     if (earnsYahtzeeBonus(state.scores, state.dice)) state.yahtzeeBonuses++;
-    state.scores[cat] = scoreFor(cat, state.dice, state.scores);
-    updateLuck(state.luck, cat, state.scores[cat]);
+    const value = scoreFor(cat, state.dice, state.scores);
+    scorePop(cat, value);
+    state.scores[cat] = value;
+    updateLuck(state.luck, cat, state.scores[cat], state.dice);
     lastScored = cat;
     state.round++;
     state.rollsLeft = 3;
@@ -369,6 +501,7 @@ if (typeof document !== 'undefined') (function () {
 
     const t = totals(scores, yahtzeeBonuses);
     $('upperSum').querySelector('.val').textContent = `${t.upper} / 63`;
+    $('upperBar').style.width = Math.min(100, (t.upper / 63) * 100) + '%';
     const ub = $('upperBonus');
     ub.querySelector('.val').textContent = t.upperBonus ? '+35' : (UPPER_KEYS.every(k => scores[k] !== null) ? '0' : '—');
     ub.classList.toggle('got', t.upperBonus > 0);
@@ -404,15 +537,27 @@ if (typeof document !== 'undefined') (function () {
   }
 
   function showGameOver() {
+    document.querySelectorAll('.pop').forEach(p => p.remove());
     const t = totals(state.scores, state.yahtzeeBonuses);
-    $('finalScore').textContent = t.grand;
+    const el = $('finalScore');
     $('bdUpper').textContent = t.upper;
     $('bdBonus').textContent = t.upperBonus;
     $('bdLower').textContent = t.lower;
     $('bdYB').textContent = t.yb;
+    $('verdict').textContent =
+      t.grand >= 300 ? "Fantastic game!" :
+      t.grand >= 230 ? "Solid score!" :
+      t.grand >= 150 ? "Nice game." : "Better luck next time.";
     $('goUndo').hidden = !undoSnap;
     $('gameOver').hidden = false;
     $('goNew').focus();
+    if (reduceMotion) { el.textContent = t.grand; return; }
+    const start = performance.now(), dur = 900;
+    (function tick(now) {
+      const p = Math.min(1, (now - start) / dur);
+      el.textContent = Math.round(t.grand * (1 - Math.pow(1 - p, 3)));
+      if (p < 1) requestAnimationFrame(tick);
+    })(start);
   }
 
   $('roll').addEventListener('click', roll);
