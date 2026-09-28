@@ -190,54 +190,97 @@ function updateLuck(luck, cat, score, dice, cfg = LUCK) {
    Hold suggestion — after a roll, picks which dice look worth
    keeping so the player can just tap to change their mind.
    ========================================================= */
-function longestRunSet(d) {
-  const s = new Set(d);
-  let best = [];
-  for (let start = 1; start <= 6; start++) {
-    const run = [];
-    for (let f = start; f <= 6 && s.has(f); f++) run.push(f);
-    if (run.length > best.length) best = run;
+// The best score this hand can post right now, among currently open
+// categories (respecting the Joker rule via allowedCategories).
+//
+// When another reroll is still coming after this one (`discountChance`),
+// Chance is left out of the comparison as long as some other category is
+// still open. Chance rewards any roll, however scattered, purely for its
+// total — so left in, it makes a so-so hand with more rerolls still ahead
+// look falsely "good enough to stop here," which is how a two-pair-plus-
+// junk roll ends up recommending you hold the junk too. On the actual
+// final reroll of a turn, or once Chance is the only box left, it's
+// counted normally — settling for a strong sum is exactly right there.
+function handScore(dice, scores, discountChance) {
+  const skipChance = discountChance && ALL_KEYS.some(k => k !== 'chance' && scores[k] === null);
+  let best = 0;
+  for (const k of allowedCategories(scores, dice)) {
+    if (k === 'chance' && skipChance) continue;
+    const s = scoreFor(k, dice, scores);
+    if (s > best) best = s;
   }
   return best;
 }
 
-function suggestHold(dice, scores) {
-  const c = counts(dice), max = Math.max(...c);
-
-  // Already there — keep it.
-  if (isYahtzee(dice)) return dice.map(() => true);
-  if (scores.lgStraight === null && hasRun(dice, 5)) return dice.map(() => true);
-  if (scores.fullHouse === null && c.includes(3) && c.includes(2)) return dice.map(() => true);
-
-  // Chasing a straight beats chasing a small set, as long as we don't
-  // already have three-of-a-kind or better going.
-  const straightOpen = scores.smStraight === null || scores.lgStraight === null;
-  const run = longestRunSet(dice);
-  if (straightOpen && max < 3 && run.length >= 3) {
-    const used = new Set();
-    return dice.map(v => { if (run.includes(v) && !used.has(v)) { used.add(v); return true; } return false; });
+// Every possible outcome of rerolling n dice, as arrays of face values.
+// REROLL_OUTCOMES[3] has all 216 (6^3) three-die combinations, etc.
+const REROLL_OUTCOMES = (() => {
+  const table = [[[]]];
+  for (let n = 1; n <= 5; n++) {
+    const prev = table[n - 1], cur = [];
+    for (const combo of prev) for (let f = 1; f <= 6; f++) cur.push(combo.concat(f));
+    table.push(cur);
   }
+  return table;
+})();
 
-  // Otherwise keep the most useful face: favour more of it, and a face
-  // whose upper-section box is still open.
-  let bestFace = 0, bestScore = -1;
-  for (let f = 1; f <= 6; f++) {
-    if (!c[f]) continue;
-    const upperOpen = scores[UPPER_KEYS[f - 1]] === null ? 3 : 0;
-    const score = c[f] * 10 + upperOpen + f;
-    if (score > bestScore) { bestScore = score; bestFace = f; }
+// True Yahtzee-optimal play needs a solved table of every game state —
+// James Glenn's classic solver runs to about 13.8GB and takes ~22 hours to
+// build, which isn't something a phone app can ship. The practical
+// approach every Yahtzee "keeper" calculator uses instead: for each
+// possible hold pattern, average the best score achievable over *every*
+// possible reroll of the rest, assuming this is the last roll of the
+// turn, and keep whichever pattern scores highest on average. It's the
+// same one-roll-ahead expected-value method used by
+// rollmydice.app/yahtzee-strategy-calculator and similar tools.
+//
+// `prevHeld` dice are never reconsidered for rerolling — this both keeps
+// a player's own choice intact and lets a turn's second and third rolls
+// reuse the (much smaller) search over only the dice still in play.
+// `discountChance` should be true whenever another reroll follows this one
+// (see handScore above) — false only for the roll that will be a turn's
+// last, when the resulting hand truly will be scored as-is.
+function bestHold(prevHeld, dice, scores, discountChance) {
+  const freeIdx = [0, 1, 2, 3, 4].filter(i => !prevHeld[i]);
+  const n = freeIdx.length;
+
+  // Many reroll outcomes land on the exact same 5-dice hand (order aside),
+  // and every hold pattern shares the same `scores`, so cache handScore by
+  // the sorted hand for the whole call — cuts the worst case (first roll,
+  // every category open) from ~16,800 evaluations down to the ≤252
+  // distinct 5-dice hands that actually exist.
+  const cache = new Map();
+  const cachedScore = hand => {
+    const key = hand[0] * 7776 + hand[1] * 1296 + hand[2] * 216 + hand[3] * 36 + hand[4];
+    let v = cache.get(key);
+    if (v === undefined) { v = handScore(hand, scores, discountChance); cache.set(key, v); }
+    return v;
+  };
+
+  let bestMask = 0, bestEV = -1;
+  const hand = dice.slice();
+  for (let mask = 0; mask < (1 << n); mask++) {
+    const rerollIdx = freeIdx.filter((_, j) => !((mask >> j) & 1));
+    const outcomes = REROLL_OUTCOMES[rerollIdx.length];
+    let total = 0;
+    for (const combo of outcomes) {
+      for (let i = 0; i < dice.length; i++) hand[i] = dice[i];
+      rerollIdx.forEach((idx, j) => { hand[idx] = combo[j]; });
+      hand.sort((a, b) => a - b);
+      total += cachedScore(hand);
+    }
+    const ev = total / outcomes.length;
+    if (ev > bestEV) { bestEV = ev; bestMask = mask; }
   }
-  return dice.map(v => v === bestFace);
+  const held = prevHeld.slice();
+  freeIdx.forEach((idx, j) => { held[idx] = !!((bestMask >> j) & 1); });
+  return held;
 }
 
-// Carries a hold choice forward across a roll: anything already held stays
-// held (its value can't have changed), and the fresh suggestion only adds
-// picks among the dice that were just rerolled. It never un-holds a die
-// the player (or an earlier suggestion) already chose to keep.
-function nextHeld(prevHeld, dice, scores) {
-  const suggestion = suggestHold(dice, scores);
-  return prevHeld.map((held, i) => held || suggestion[i]);
-}
+const suggestHold = (dice, scores, discountChance = true) =>
+  bestHold([false, false, false, false, false], dice, scores, discountChance);
+const nextHeld = (prevHeld, dice, scores, discountChance = true) =>
+  bestHold(prevHeld, dice, scores, discountChance);
 
 if (typeof module !== 'undefined') {
   module.exports = { baseScore, scoreFor, allowedCategories, jokerActive, earnsYahtzeeBonus, totals, ALL_KEYS,
@@ -369,7 +412,7 @@ if (typeof document !== 'undefined') (function () {
 
     if (reduceMotion) {
       state.dice = final;
-      state.held = state.rollsLeft > 0 ? nextHeld(prevHeld, final, state.scores) : [false, false, false, false, false];
+      state.held = state.rollsLeft > 0 ? nextHeld(prevHeld, final, state.scores, state.rollsLeft > 1) : [false, false, false, false, false];
       render();
       if (isYahtzee(final)) celebrate(false);
       return;
@@ -395,7 +438,7 @@ if (typeof document !== 'undefined') (function () {
       clearInterval(flicker);
       moving.forEach(i => dieEls[i].classList.remove('rolling'));
       state.dice = final;
-      state.held = state.rollsLeft > 0 ? nextHeld(prevHeld, final, state.scores) : [false, false, false, false, false];
+      state.held = state.rollsLeft > 0 ? nextHeld(prevHeld, final, state.scores, state.rollsLeft > 1) : [false, false, false, false, false];
       rolling = false;
       render();
       if (isYahtzee(final) && (state.scores.yahtzee === null || state.scores.yahtzee === 50)) celebrate(state.scores.yahtzee === 50);
