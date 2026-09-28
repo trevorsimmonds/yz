@@ -282,10 +282,29 @@ const suggestHold = (dice, scores, discountChance = true) =>
 const nextHeld = (prevHeld, dice, scores, discountChance = true) =>
   bestHold(prevHeld, dice, scores, discountChance);
 
+// When a turn's rolls run out, the game scores it for you automatically —
+// whichever open category this hand scores highest in. Ties (including the
+// "everything open scores 0" case) go to whichever category is hardest to
+// fill well on a future roll, so that one gets used up now and the more
+// forgiving category stays open for later.
+const SACRIFICE_ORDER = ['yahtzee', 'lgStraight', 'smStraight', 'fourKind', 'fullHouse', 'threeKind',
+  'sixes', 'fives', 'fours', 'threes', 'twos', 'ones', 'chance'];
+
+function bestCategory(dice, scores) {
+  let best = null, bestScore = -1;
+  for (const k of allowedCategories(scores, dice)) {
+    const s = scoreFor(k, dice, scores);
+    if (s > bestScore || (s === bestScore && SACRIFICE_ORDER.indexOf(k) < SACRIFICE_ORDER.indexOf(best))) {
+      best = k; bestScore = s;
+    }
+  }
+  return best;
+}
+
 if (typeof module !== 'undefined') {
   module.exports = { baseScore, scoreFor, allowedCategories, jokerActive, earnsYahtzeeBonus, totals, ALL_KEYS,
     UPPER_KEYS, LOWER_KEYS, PAR, LUCK, newLuck, faceWeights, luckyRoll, updateLuck, counts, hasRun, isYahtzee,
-    suggestHold, nextHeld };
+    suggestHold, nextHeld, bestCategory };
 }
 
 /* =========================================================
@@ -415,6 +434,7 @@ if (typeof document !== 'undefined') (function () {
       state.held = state.rollsLeft > 0 ? nextHeld(prevHeld, final, state.scores, state.rollsLeft > 1) : [false, false, false, false, false];
       render();
       if (isYahtzee(final)) celebrate(false);
+      if (state.rollsLeft === 0) autoScore();
       return;
     }
 
@@ -442,7 +462,19 @@ if (typeof document !== 'undefined') (function () {
       rolling = false;
       render();
       if (isYahtzee(final) && (state.scores.yahtzee === null || state.scores.yahtzee === 50)) celebrate(state.scores.yahtzee === 50);
+      if (state.rollsLeft === 0) autoScore();
     }, total);
+  }
+
+  // Once a turn's last roll is used, no more decisions to make — score the
+  // hand in whatever open category it scores highest in and move on. A short
+  // pause lets the player see the final roll (and any Yahtzee celebration)
+  // before it locks in; Undo still reverses it if they'd have chosen
+  // differently.
+  function autoScore() {
+    const cat = bestCategory(state.dice, state.scores);
+    if (!cat) return;
+    setTimeout(() => { if (!rolling && state.rollsLeft === 0) pick(cat); }, reduceMotion ? 500 : 900);
   }
 
   /* ---------- Celebration ---------- */
@@ -632,7 +664,7 @@ if (typeof document !== 'undefined') (function () {
       const forced = allowed.length === 1 ? `Joker: must use ${LABEL[allowed[0]]}.` : 'Joker: pick a highlighted box.';
       status.innerHTML = bonus + forced;
     } else if (isYahtzee(dice) && scores.yahtzee === null) status.innerHTML = '<b>Yahtzee!</b> Pick a category.';
-    else if (rollsLeft === 0) status.textContent = 'Pick a category to score.';
+    else if (rollsLeft === 0) status.textContent = 'Out of rolls — scoring the best category…';
     else status.textContent = held.some(Boolean)
       ? 'We held our pick — tap any die to change it, then roll again.'
       : 'Tap dice to hold, roll again, or pick a category.';
