@@ -1,10 +1,11 @@
 // Bump the version whenever you change any file (and the label in index.html).
-const CACHE = 'yahtzee-v9';
+const CACHE = 'yahtzee-v10';
 const ASSETS = [
   './',
   './index.html',
   './style.css',
   './app.js',
+  './strategy-table.bin',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',

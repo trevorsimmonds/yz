@@ -190,18 +190,14 @@ function updateLuck(luck, cat, score, dice, cfg = LUCK) {
    Hold suggestion — after a roll, picks which dice look worth
    keeping so the player can just tap to change their mind.
    ========================================================= */
-// The best score this hand can post right now, among currently open
-// categories (respecting the Joker rule via allowedCategories).
-//
-// When another reroll is still coming after this one (`discountChance`),
-// Chance is left out of the comparison as long as some other category is
-// still open. Chance rewards any roll, however scattered, purely for its
-// total — so left in, it makes a so-so hand with more rerolls still ahead
-// look falsely "good enough to stop here," which is how a two-pair-plus-
-// junk roll ends up recommending you hold the junk too. On the actual
-// final reroll of a turn, or once Chance is the only box left, it's
-// counted normally — settling for a strong sum is exactly right there.
-function handScore(dice, scores, discountChance) {
+// Fallback only: used for the roll-2 hold decision when the strategy table
+// (see below) hasn't loaded yet. The best score this hand can post right
+// now, among currently open categories — with Chance left out of the
+// comparison as long as another category is still open, since otherwise
+// it makes a so-so hand with more rerolls still ahead look falsely "good
+// enough to stop here," which is how a two-pair-plus-junk roll used to end
+// up recommending you hold the junk too.
+function handScoreLegacy(dice, scores, discountChance) {
   const skipChance = discountChance && ALL_KEYS.some(k => k !== 'chance' && scores[k] === null);
   let best = 0;
   for (const k of allowedCategories(scores, dice)) {
@@ -211,6 +207,57 @@ function handScore(dice, scores, discountChance) {
   }
   return best;
 }
+
+// Which categories are still open, as a 13-bit mask (bit i set means
+// ALL_KEYS[i] is open) — the same encoding the strategy table is indexed
+// by (see tools/build-strategy-table.js).
+const categoryMask = scores => ALL_KEYS.reduce((m, k, i) => scores[k] === null ? m | (1 << i) : m, 0);
+
+// The value of scoring `hand` right now, in whichever open category is
+// best. Two parts: the exact, live value of doing it THIS turn — real
+// score, the actual Yahtzee bonus (+100) if this hand earns one, and the
+// actual +35 upper-section bonus if this category's score would cross the
+// real 63-point running total — plus, if the strategy table has loaded,
+// its estimate of what the rest of the game is worth with that category
+// gone. (The table itself doesn't know about bonuses — see the build
+// script's header — but it doesn't need to: only the current, live turn's
+// bonus math matters here, since that's the only bonus this decision can
+// actually affect.) With no table loaded yet, this still returns the
+// bonus-aware immediate score, just without the "is this category worth
+// keeping open" half of the picture.
+function handValue(hand, scores, strat) {
+  const mask = categoryMask(scores);
+  const upperTotal = UPPER_KEYS.reduce((a, k) => a + (scores[k] || 0), 0);
+  const yahtzeeBonus = earnsYahtzeeBonus(scores, hand) ? 100 : 0;
+  let bestCat = null, bestVal = -Infinity;
+  for (const k of allowedCategories(scores, hand)) {
+    const raw = scoreFor(k, hand, scores);
+    let s = raw + yahtzeeBonus;
+    if (UPPER_KEYS.includes(k) && upperTotal < 63 && upperTotal + raw >= 63) s += 35;
+    const future = strat ? strat.V[mask & ~(1 << ALL_KEYS.indexOf(k))] / STRAT_SCALE : 0;
+    const val = s + future;
+    if (val > bestVal) { bestVal = val; bestCat = k; }
+  }
+  return { cat: bestCat, val: bestVal };
+}
+
+// Canonical list of every sorted 5-dice hand (252 of them — multisets of
+// size 5 from 6 faces) plus a lookup from a hand back to its index. Shared
+// between the strategy-table build script and the runtime code that reads
+// the table, so the two can never disagree about what index N means.
+const ALL_HANDS = (() => {
+  const list = [];
+  for (let a = 1; a <= 6; a++)
+    for (let b = a; b <= 6; b++)
+      for (let c = b; c <= 6; c++)
+        for (let d = c; d <= 6; d++)
+          for (let e = d; e <= 6; e++)
+            list.push([a, b, c, d, e]);
+  return list;
+})();
+const handKey = h => h[0] * 7776 + h[1] * 1296 + h[2] * 216 + h[3] * 36 + h[4];
+const HAND_INDEX = new Map(ALL_HANDS.map((h, i) => [handKey(h), i]));
+const handIndex = hand => HAND_INDEX.get(handKey(hand.slice().sort((a, b) => a - b)));
 
 // Every possible outcome of rerolling n dice, as arrays of face values.
 // REROLL_OUTCOMES[3] has all 216 (6^3) three-die combinations, etc.
@@ -224,43 +271,68 @@ const REROLL_OUTCOMES = (() => {
   return table;
 })();
 
-// True Yahtzee-optimal play needs a solved table of every game state —
-// James Glenn's classic solver runs to about 13.8GB and takes ~22 hours to
-// build, which isn't something a phone app can ship. The practical
-// approach every Yahtzee "keeper" calculator uses instead: for each
-// possible hold pattern, average the best score achievable over *every*
-// possible reroll of the rest, assuming this is the last roll of the
-// turn, and keep whichever pattern scores highest on average. It's the
-// same one-roll-ahead expected-value method used by
-// rollmydice.app/yahtzee-strategy-calculator and similar tools.
+// The strategy table (see tools/build-strategy-table.js) ships two arrays
+// packed into one Int16Array, values scaled by STRAT_SCALE for one decimal
+// place of precision in an integer-typed file:
+//   V[mask]      — 8,192 entries — value of a fresh turn with this
+//                  category-state, before any of its 3 rolls.
+//   G[mask][h]   — 8,192 × 252 entries — value of hand h (by canonical
+//                  ALL_HANDS index) with exactly one more hold+reroll+
+//                  score left in the turn.
+// `loadStrategyTable(buf)` (below, in the browser section) turns the raw
+// bytes into `{ V, G }` views over that same buffer — nothing here decodes
+// the file, so these pure functions stay Node-testable without a fetch.
+const STRAT_SCALE = 10;
+const NUM_HANDS = ALL_HANDS.length;
+
+// True Yahtzee-optimal play needs a state that also tracks the exact
+// upper-section running total — James Glenn's classic solver runs to about
+// 13.8GB and takes ~22 hours to build that way, not something a phone app
+// can ship. The strategy table instead uses the standard lightweight
+// simplification real Yahtzee solvers ship with: value the 8,192 possible
+// "which categories are still open" states by exact backward induction,
+// but don't track progress toward the 63-point bonus in that table (see
+// the build script's header for the full write-up, and handValue above for
+// how the live bonus math is added back in for the decision that's
+// actually being made right now).
 //
 // `prevHeld` dice are never reconsidered for rerolling — this both keeps
 // a player's own choice intact and lets a turn's second and third rolls
 // reuse the (much smaller) search over only the dice still in play.
 // `discountChance` should be true whenever another reroll follows this one
-// (see handScore above) — false only for the roll that will be a turn's
-// last, when the resulting hand truly will be scored as-is.
-function bestHold(prevHeld, dice, scores, discountChance) {
+// — false only for the roll that will be a turn's last, when the
+// resulting hand truly will be scored as-is.
+function bestHold(prevHeld, dice, scores, discountChance, strat) {
   const freeIdx = [0, 1, 2, 3, 4].filter(i => !prevHeld[i]);
   const n = freeIdx.length;
+  const mask = strat && discountChance ? categoryMask(scores) : 0;
 
   // Many reroll outcomes land on the exact same 5-dice hand (order aside),
-  // and every hold pattern shares the same `scores`, so cache handScore by
-  // the sorted hand for the whole call — cuts the worst case (first roll,
-  // every category open) from ~16,800 evaluations down to the ≤252
-  // distinct 5-dice hands that actually exist.
+  // and every hold pattern shares the same `scores`, so cache each hand's
+  // value for the whole call — cuts the worst case (first roll, every
+  // category open) from ~16,800 evaluations down to the ≤252 distinct
+  // 5-dice hands that actually exist.
   const cache = new Map();
   const cachedScore = hand => {
     const key = hand[0] * 7776 + hand[1] * 1296 + hand[2] * 216 + hand[3] * 36 + hand[4];
     let v = cache.get(key);
-    if (v === undefined) { v = handScore(hand, scores, discountChance); cache.set(key, v); }
+    if (v === undefined) {
+      // Deciding hold for a non-final reroll: look up (or fall back to
+      // approximating) the value of "one more hold+reroll, then score" —
+      // never just this hand's own immediate score, which is a different
+      // question (see the module doc comment above bestHold).
+      v = discountChance
+        ? (strat ? strat.G[mask * NUM_HANDS + handIndex(hand)] / STRAT_SCALE : handScoreLegacy(hand, scores, true))
+        : handValue(hand, scores, strat).val;
+      cache.set(key, v);
+    }
     return v;
   };
 
-  let bestMask = 0, bestEV = -1;
+  let bestMask = 0, bestEV = -Infinity;
   const hand = dice.slice();
-  for (let mask = 0; mask < (1 << n); mask++) {
-    const rerollIdx = freeIdx.filter((_, j) => !((mask >> j) & 1));
+  for (let holdMask = 0; holdMask < (1 << n); holdMask++) {
+    const rerollIdx = freeIdx.filter((_, j) => !((holdMask >> j) & 1));
     const outcomes = REROLL_OUTCOMES[rerollIdx.length];
     let total = 0;
     for (const combo of outcomes) {
@@ -270,41 +342,30 @@ function bestHold(prevHeld, dice, scores, discountChance) {
       total += cachedScore(hand);
     }
     const ev = total / outcomes.length;
-    if (ev > bestEV) { bestEV = ev; bestMask = mask; }
+    if (ev > bestEV) { bestEV = ev; bestMask = holdMask; }
   }
   const held = prevHeld.slice();
   freeIdx.forEach((idx, j) => { held[idx] = !!((bestMask >> j) & 1); });
   return held;
 }
 
-const suggestHold = (dice, scores, discountChance = true) =>
-  bestHold([false, false, false, false, false], dice, scores, discountChance);
-const nextHeld = (prevHeld, dice, scores, discountChance = true) =>
-  bestHold(prevHeld, dice, scores, discountChance);
+const suggestHold = (dice, scores, discountChance = true, strat = null) =>
+  bestHold([false, false, false, false, false], dice, scores, discountChance, strat);
+const nextHeld = (prevHeld, dice, scores, discountChance = true, strat = null) =>
+  bestHold(prevHeld, dice, scores, discountChance, strat);
 
 // When a turn's rolls run out, the game scores it for you automatically —
-// whichever open category this hand scores highest in. Ties (including the
-// "everything open scores 0" case) go to whichever category is hardest to
-// fill well on a future roll, so that one gets used up now and the more
-// forgiving category stays open for later.
-const SACRIFICE_ORDER = ['yahtzee', 'lgStraight', 'smStraight', 'fourKind', 'fullHouse', 'threeKind',
-  'sixes', 'fives', 'fours', 'threes', 'twos', 'ones', 'chance'];
-
-function bestCategory(dice, scores) {
-  let best = null, bestScore = -1;
-  for (const k of allowedCategories(scores, dice)) {
-    const s = scoreFor(k, dice, scores);
-    if (s > bestScore || (s === bestScore && SACRIFICE_ORDER.indexOf(k) < SACRIFICE_ORDER.indexOf(best))) {
-      best = k; bestScore = s;
-    }
-  }
-  return best;
+// whichever open category this hand is worth the most in, per handValue
+// above (real score + real bonuses this turn, plus the table's estimate of
+// what keeping each category open would be worth for the rest of the game).
+function bestCategory(dice, scores, strat = null) {
+  return handValue(dice, scores, strat).cat;
 }
 
 if (typeof module !== 'undefined') {
   module.exports = { baseScore, scoreFor, allowedCategories, jokerActive, earnsYahtzeeBonus, totals, ALL_KEYS,
     UPPER_KEYS, LOWER_KEYS, PAR, LUCK, newLuck, faceWeights, luckyRoll, updateLuck, counts, hasRun, isYahtzee,
-    suggestHold, nextHeld, bestCategory };
+    suggestHold, nextHeld, bestCategory, ALL_HANDS, handIndex, handValue, categoryMask, STRAT_SCALE, NUM_HANDS };
 }
 
 /* =========================================================
@@ -314,6 +375,18 @@ if (typeof document !== 'undefined') (function () {
   const $ = id => document.getElementById(id);
   const PIPS = { 1: [4], 2: [0, 8], 3: [0, 4, 8], 4: [0, 2, 6, 8], 5: [0, 2, 4, 6, 8], 6: [0, 2, 3, 5, 6, 8] };
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // The precomputed dice-strategy table (see tools/build-strategy-table.js) —
+  // null until it's loaded, in which case hold suggestions and auto-scoring
+  // fall back to a simpler heuristic (still correct, just less far-sighted).
+  // It's a small file and the service worker caches it offline, so in
+  // practice this resolves near-instantly on every visit after the first.
+  let strat = null;
+  fetch('strategy-table.bin').then(r => r.ok ? r.arrayBuffer() : Promise.reject(r.status)).then(buf => {
+    const NUM_MASKS = 8192;
+    const flat = new Int16Array(buf);
+    strat = { V: flat.subarray(0, NUM_MASKS), G: flat.subarray(NUM_MASKS) };
+  }).catch(() => { /* offline on first visit before the SW has cached it, or a fetch error — keep the fallback */ });
 
   let state, undoSnap = null, rolling = false, lastScored = null, confirmTimer = null;
 
@@ -442,7 +515,7 @@ if (typeof document !== 'undefined') (function () {
 
     if (reduceMotion) {
       state.dice = final;
-      state.held = state.rollsLeft > 0 ? nextHeld(prevHeld, final, state.scores, state.rollsLeft > 1) : [false, false, false, false, false];
+      state.held = state.rollsLeft > 0 ? nextHeld(prevHeld, final, state.scores, state.rollsLeft > 1, strat) : [false, false, false, false, false];
       render();
       if (isYahtzee(final)) celebrate(false);
       else rollConfetti();
@@ -470,7 +543,7 @@ if (typeof document !== 'undefined') (function () {
       clearInterval(flicker);
       moving.forEach(i => dieEls[i].classList.remove('rolling'));
       state.dice = final;
-      state.held = state.rollsLeft > 0 ? nextHeld(prevHeld, final, state.scores, state.rollsLeft > 1) : [false, false, false, false, false];
+      state.held = state.rollsLeft > 0 ? nextHeld(prevHeld, final, state.scores, state.rollsLeft > 1, strat) : [false, false, false, false, false];
       rolling = false;
       render();
       if (isYahtzee(final) && (state.scores.yahtzee === null || state.scores.yahtzee === 50)) celebrate(state.scores.yahtzee === 50);
@@ -485,7 +558,7 @@ if (typeof document !== 'undefined') (function () {
   // before it locks in; Undo still reverses it if they'd have chosen
   // differently.
   function autoScore() {
-    const cat = bestCategory(state.dice, state.scores);
+    const cat = bestCategory(state.dice, state.scores, strat);
     if (!cat) return;
     setTimeout(() => { if (!rolling && state.rollsLeft === 0) pick(cat); }, reduceMotion ? 500 : 900);
   }

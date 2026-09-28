@@ -29,10 +29,13 @@ Single-player Yahtzee. It installs on Android from Chrome and works offline. No 
   (Double-clicking `index.html` also plays, but the offline/install features won't be active.)
 
 ## Updating later
-If you change any file, bump the version in `sw.js` (`yahtzee-v9` → `yahtzee-v10`) and the
+If you change any file, bump the version in `sw.js` (`yahtzee-v10` → `yahtzee-v11`) and the
 little version label next to the title in `index.html`, then push. The app loads fresh files
 whenever it has internet, so the label tells you which version you're playing.
 
 ## Files
 - `index.html`, `style.css`, `app.js`: the game
 - `manifest.webmanifest`, `sw.js`, `icons/`: install and offline support
+- `strategy-table.bin`: precomputed dice-strategy data used for hold suggestions and
+  auto-scoring (see `tools/build-strategy-table.js` for how it's generated — only needs
+  re-running if the scoring rules ever change)
