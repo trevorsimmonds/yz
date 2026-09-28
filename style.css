@@ -136,6 +136,7 @@ button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .ghost.confirm { border-color: var(--accent-2); color: var(--accent-2); }
 .icon-btn { width: 36px; padding: 0; display: grid; place-items: center; }
 .icon-btn svg { width: 18px; height: 18px; }
+.icon-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--pick-bg, var(--card)); }
 
 .board {
   flex: 1;

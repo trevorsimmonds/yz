@@ -392,6 +392,17 @@ if (typeof document !== 'undefined') (function () {
   $('themeClose').addEventListener('click', () => { $('themePicker').hidden = true; });
   $('themePicker').addEventListener('click', e => { if (e.target.id === 'themePicker') $('themePicker').hidden = true; });
 
+  /* ---------- Confetti-on-roll toggle ---------- */
+  let confettiOnRoll = false;
+  try { confettiOnRoll = localStorage.getItem('yz-confetti-roll') === '1'; } catch (_) {}
+  const confettiBtn = $('confettiToggle');
+  confettiBtn.setAttribute('aria-pressed', String(confettiOnRoll));
+  confettiBtn.addEventListener('click', () => {
+    confettiOnRoll = !confettiOnRoll;
+    confettiBtn.setAttribute('aria-pressed', String(confettiOnRoll));
+    try { localStorage.setItem('yz-confetti-roll', confettiOnRoll ? '1' : '0'); } catch (_) {}
+  });
+
   const diceEl = $('dice');
   const dieEls = [];
   for (let i = 0; i < 5; i++) {
@@ -434,6 +445,7 @@ if (typeof document !== 'undefined') (function () {
       state.held = state.rollsLeft > 0 ? nextHeld(prevHeld, final, state.scores, state.rollsLeft > 1) : [false, false, false, false, false];
       render();
       if (isYahtzee(final)) celebrate(false);
+      else rollConfetti();
       if (state.rollsLeft === 0) autoScore();
       return;
     }
@@ -462,6 +474,7 @@ if (typeof document !== 'undefined') (function () {
       rolling = false;
       render();
       if (isYahtzee(final) && (state.scores.yahtzee === null || state.scores.yahtzee === 50)) celebrate(state.scores.yahtzee === 50);
+      else rollConfetti();
       if (state.rollsLeft === 0) autoScore();
     }, total);
   }
@@ -479,6 +492,65 @@ if (typeof document !== 'undefined') (function () {
 
   /* ---------- Celebration ---------- */
   const canvas = $('confetti'), ctx = canvas.getContext ? canvas.getContext('2d') : null;
+
+  // Fires a burst of confetti from a point (defaults to top-center, like the
+  // Yahtzee celebration). Several bursts can run concurrently — each keeps
+  // its own particle list and cancels only its own animation frame loop.
+  function burstConfetti({ count = 100, x = innerWidth / 2, y = innerHeight * 0.3, spread = 80, life = 2600 } = {}) {
+    if (reduceMotion || !ctx) return;
+    canvas.hidden = false;
+    canvas.width = innerWidth; canvas.height = innerHeight;
+    const cs = getComputedStyle(document.documentElement).getPropertyValue('--confetti');
+    const colors = cs.split(',').map(s => s.trim()).filter(Boolean);
+    const pieces = Array.from({ length: count }, () => ({
+      x: x + (Math.random() - 0.5) * spread,
+      y,
+      vx: (Math.random() - 0.5) * 9,
+      vy: -Math.random() * 10 - 4,
+      s: Math.random() * 6 + 4,
+      rot: Math.random() * Math.PI,
+      vr: (Math.random() - 0.5) * 0.3,
+      c: colors[Math.floor(Math.random() * colors.length)],
+    }));
+    activeBursts.push(pieces);
+    const start = performance.now();
+    function tick(now) {
+      const dt = Math.min(32, now - (tick.last || now)); tick.last = now;
+      let alive = false;
+      for (const p of pieces) {
+        p.vy += 0.028 * dt;
+        p.x += p.vx * (dt / 16); p.y += p.vy * (dt / 16); p.rot += p.vr;
+        if (p.y < canvas.height + 20) alive = true;
+      }
+      if (alive && now - start < life) {
+        requestAnimationFrame(tick);
+      } else {
+        const idx = activeBursts.indexOf(pieces);
+        if (idx !== -1) activeBursts.splice(idx, 1);
+        if (!activeBursts.length) canvas.hidden = true;
+      }
+      redrawConfetti();
+    }
+    requestAnimationFrame(tick);
+  }
+
+  // All active bursts share one canvas, so every burst's tick redraws the
+  // full set — otherwise an older burst finishing first would wipe a newer
+  // one's frame (or vice versa) instead of drawing both.
+  const activeBursts = [];
+  function redrawConfetti() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (const pieces of activeBursts) {
+      for (const p of pieces) {
+        ctx.save();
+        ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+        ctx.fillStyle = p.c;
+        ctx.fillRect(-p.s / 2, -p.s / 3, p.s, p.s * 0.6);
+        ctx.restore();
+      }
+    }
+  }
+
   function celebrate(bonus) {
     if (reduceMotion) return;
     const host = $('bannerHost');
@@ -490,41 +562,16 @@ if (typeof document !== 'undefined') (function () {
     host.appendChild(banner);
     setTimeout(() => banner.remove(), 1650);
     dieEls.forEach(el => { el.classList.remove('yz'); void el.offsetWidth; el.classList.add('yz'); });
-    if (!ctx) return;
-    canvas.hidden = false;
-    canvas.width = innerWidth; canvas.height = innerHeight;
-    const cs = getComputedStyle(document.documentElement).getPropertyValue('--confetti');
-    const colors = cs.split(',').map(s => s.trim()).filter(Boolean);
-    const count = bonus ? 160 : 100;
-    const pieces = Array.from({ length: count }, () => ({
-      x: innerWidth / 2 + (Math.random() - 0.5) * 80,
-      y: innerHeight * 0.3,
-      vx: (Math.random() - 0.5) * 9,
-      vy: -Math.random() * 10 - 4,
-      s: Math.random() * 6 + 4,
-      rot: Math.random() * Math.PI,
-      vr: (Math.random() - 0.5) * 0.3,
-      c: colors[Math.floor(Math.random() * colors.length)],
-    }));
-    const start = performance.now();
-    function tick(now) {
-      const dt = Math.min(32, now - (tick.last || now)); tick.last = now;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      let alive = false;
-      for (const p of pieces) {
-        p.vy += 0.028 * dt;
-        p.x += p.vx * (dt / 16); p.y += p.vy * (dt / 16); p.rot += p.vr;
-        if (p.y < canvas.height + 20) alive = true;
-        ctx.save();
-        ctx.translate(p.x, p.y); ctx.rotate(p.rot);
-        ctx.fillStyle = p.c;
-        ctx.fillRect(-p.s / 2, -p.s / 3, p.s, p.s * 0.6);
-        ctx.restore();
-      }
-      if (alive && now - start < 2600) requestAnimationFrame(tick);
-      else { ctx.clearRect(0, 0, canvas.width, canvas.height); canvas.hidden = true; }
-    }
-    requestAnimationFrame(tick);
+    burstConfetti({ count: bonus ? 160 : 100 });
+  }
+
+  // A light burst from the dice area for the confetti-on-every-roll toggle —
+  // much smaller and shorter-lived than the Yahtzee celebration so it doesn't
+  // overwhelm a game with 39 rolls in it.
+  function rollConfetti() {
+    if (!confettiOnRoll) return;
+    const r = diceEl.getBoundingClientRect();
+    burstConfetti({ count: 26, x: r.left + r.width / 2, y: r.top + r.height / 2, spread: r.width, life: 1100 });
   }
 
   function scorePop(cat, value) {
