@@ -88,6 +88,10 @@ function totals(scores, yahtzeeBonuses) {
       A good turn drains it.
    3. Drought protection: if you've gone `droughtStart` turns without a
       Yahtzee, each further turn pulls harder toward matching dice.
+   4. Hot streak: right after a Yahtzee, the next `hotStreak` turns get
+      the same kind of pull drought protection gives, tapering off by one
+      turn at a time — a Yahtzee makes the next one a little more likely,
+      the same way a "hot hand" streak mechanic works in other games.
    ========================================================= */
 const LUCK = {
   magnet: 0.25,      // extra weight for helpful faces (0 = fair dice)
@@ -97,6 +101,9 @@ const LUCK = {
   droughtStart: 7,   // turns without a Yahtzee before drought help kicks in (i.e. from round 8)
   droughtMagnet: 0.3,// extra pull toward held matching dice, per drought turn
   droughtPity: 0.2,  // extra best-of-N chance, per drought turn
+  hotStreak: 3,      // turns after a Yahtzee that still get the hot-streak pull
+  hotMagnet: 0.25,   // extra pull toward held matching dice, per turn of streak left
+  hotPity: 0.15,     // extra best-of-N chance, per turn of streak left
 };
 // Typical score per category, used to judge "good" vs "bad" turns.
 const PAR = {
@@ -104,7 +111,7 @@ const PAR = {
   threeKind: 20, fourKind: 13, fullHouse: 18, smStraight: 22, lgStraight: 18,
   yahtzee: 15, chance: 22,
 };
-const newLuck = () => ({ pity: 0, dry: 0 });
+const newLuck = () => ({ pity: 0, dry: 0, hot: 0 });
 
 function faceWeights(dice, held, scores, magnet, kindExtra = 0) {
   const w = [0, 1, 1, 1, 1, 1, 1];
@@ -145,8 +152,11 @@ function drawFace(w, rng) {
   return 6;
 }
 
-// How attractive a set of dice is, given open categories.
-function rollValue(d, scores, drought = 0) {
+// How attractive a set of dice is, given open categories. `boost` is the
+// combined drought/hot-streak level — either way, the game currently wants
+// to nudge the player toward a big set of matching dice, so both feed the
+// same term.
+function rollValue(d, scores, boost = 0) {
   const c = counts(d);
   const max = Math.max(...c);
   let best = 0;
@@ -156,29 +166,36 @@ function rollValue(d, scores, drought = 0) {
     for (let n = 5; n >= 3; n--) if (hasRun(d, n)) { potential = Math.max(potential, (n - 2) * 8); break; }
   }
   if (isYahtzee(d) && (scores.yahtzee === null || scores.yahtzee === 50)) best += 60;
-  return best + potential + drought * max * 4;
+  return best + potential + boost * max * 4;
 }
 
 const droughtLevel = (luck, scores, cfg) =>
   scores.yahtzee === 0 ? 0 : Math.max(0, (luck.dry || 0) - cfg.droughtStart + 1);
+const hotLevel = luck => luck.hot || 0;
 
 function luckyRoll(dice, held, scores, luck, rng = Math.random, cfg = LUCK) {
   const dl = droughtLevel(luck, scores, cfg);
-  const w = faceWeights(dice, held, scores, cfg.magnet, dl * (cfg.droughtMagnet || 0));
+  const hl = hotLevel(luck);
+  const kindExtra = dl * (cfg.droughtMagnet || 0) + hl * (cfg.hotMagnet || 0);
+  const boost = dl + hl;
+  const w = faceWeights(dice, held, scores, cfg.magnet, kindExtra);
   const once = () => dice.map((v, i) => held[i] ? v : drawFace(w, rng));
-  const pity = Math.min(1, cfg.pityBase + luck.pity + dl * (cfg.droughtPity || 0));
+  const pity = Math.min(1, cfg.pityBase + luck.pity + dl * (cfg.droughtPity || 0) + hl * (cfg.hotPity || 0));
   if (cfg.bestOf < 2 || rng() >= pity) return once();
-  let best = once(), bestV = rollValue(best, scores, dl);
+  let best = once(), bestV = rollValue(best, scores, boost);
   for (let n = 1; n < cfg.bestOf; n++) {
-    const cand = once(), v = rollValue(cand, scores, dl);
+    const cand = once(), v = rollValue(cand, scores, boost);
     if (v > bestV) { best = cand; bestV = v; }
   }
   return best;
 }
 
-// Call after a turn is scored.
+// Call after a turn is scored. A Yahtzee starts (or refreshes) the hot
+// streak; otherwise it counts down by one turn until it's spent.
 function updateLuck(luck, cat, score, dice, cfg = LUCK) {
-  luck.dry = isYahtzee(dice) ? 0 : (luck.dry || 0) + 1;
+  const gotYahtzee = isYahtzee(dice);
+  luck.dry = gotYahtzee ? 0 : (luck.dry || 0) + 1;
+  luck.hot = gotYahtzee ? (cfg.hotStreak || 0) : Math.max(0, (luck.hot || 0) - 1);
   const good = score >= PAR[cat] + 3 || cat === 'yahtzee' && score === 50;
   const bad = score === 0 || score < PAR[cat] - 2;
   if (good) luck.pity = 0;
