@@ -1,5 +1,5 @@
 // Bump the version whenever you change any file (and the label in index.html).
-const CACHE = 'yahtzee-v11';
+const CACHE = 'yahtzee-v12';
 const ASSETS = [
   './',
   './index.html',

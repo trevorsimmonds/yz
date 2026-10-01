@@ -102,8 +102,8 @@ const LUCK = {
   droughtMagnet: 0.3,// extra pull toward held matching dice, per drought turn
   droughtPity: 0.2,  // extra best-of-N chance, per drought turn
   hotStreak: 3,      // turns after a Yahtzee that still get the hot-streak pull
-  hotMagnet: 0.25,   // extra pull toward held matching dice, per turn of streak left
-  hotPity: 0.15,     // extra best-of-N chance, per turn of streak left
+  hotMagnet: 0.5,    // extra pull toward held matching dice, per turn of streak left
+  hotPity: 0.4,      // extra best-of-N chance, per turn of streak left
 };
 // Typical score per category, used to judge "good" vs "bad" turns.
 const PAR = {
@@ -445,8 +445,12 @@ if (typeof document !== 'undefined') (function () {
   upperCol.appendChild(Object.assign(document.createElement('div'), { className: 'sep' }));
   upperCol.appendChild(makeSub('upperSum', 'Subtotal'));
   const progress = Object.assign(document.createElement('div'), { className: 'progress' });
-  progress.innerHTML = '<i id="upperBar"></i>';
+  progress.innerHTML = '<i id="upperBar"></i><i id="upperSpark" class="spark"></i>';
   upperCol.appendChild(progress);
+  const pacePill = Object.assign(document.createElement('div'), { className: 'pace', id: 'pacePill' });
+  pacePill.hidden = true;
+  pacePill.textContent = '🎯 On pace for bonus';
+  upperCol.appendChild(pacePill);
   upperCol.appendChild(makeSub('upperBonus', 'Bonus (63+)'));
   LOWER.forEach(([k, l]) => lowerCol.appendChild(makeRow(k, l)));
   lowerCol.appendChild(Object.assign(document.createElement('div'), { className: 'sep' }));
@@ -770,7 +774,21 @@ if (typeof document !== 'undefined') (function () {
 
     const t = totals(scores, yahtzeeBonuses);
     $('upperSum').querySelector('.val').textContent = `${t.upper} / 63`;
-    $('upperBar').style.width = Math.min(100, (t.upper / 63) * 100) + '%';
+    const upperPct = Math.min(100, (t.upper / 63) * 100);
+    $('upperBar').style.width = upperPct + '%';
+    const upperFilled = UPPER_KEYS.filter(k => scores[k] !== null).length;
+    const upperDone = upperFilled === UPPER_KEYS.length;
+    const progEl = $('upperBar').parentElement;
+    progEl.classList.remove('near1', 'near2', 'near3');
+    if (!t.upperBonus && !upperDone) {
+      if (upperPct >= 85) progEl.classList.add('near3');
+      else if (upperPct >= 65) progEl.classList.add('near2');
+      else if (upperPct >= 35) progEl.classList.add('near1');
+    }
+    const onPace = upperFilled > 0 && t.upper >= (upperFilled / UPPER_KEYS.length) * 63 - 0.01;
+    progEl.classList.toggle('on-pace', !t.upperBonus && !upperDone && onPace);
+    const pacePill = $('pacePill');
+    pacePill.hidden = over || t.upperBonus > 0 || upperDone || upperFilled === 0 || !onPace;
     const ub = $('upperBonus');
     ub.querySelector('.val').textContent = t.upperBonus ? '+35' : (UPPER_KEYS.every(k => scores[k] !== null) ? '0' : '—');
     ub.classList.toggle('got', t.upperBonus > 0);
@@ -781,6 +799,7 @@ if (typeof document !== 'undefined') (function () {
 
     // Header + buttons
     $('round').textContent = over ? 'Finished' : `Round ${round} / 13`;
+    $('streak').hidden = over || !(state.luck && state.luck.hot > 0);
     const rollBtn = $('roll');
     rollBtn.disabled = over || rolling || rollsLeft === 0 || held.every(Boolean) && rolled;
     rollBtn.textContent = over ? 'Game over'
