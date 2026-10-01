@@ -101,9 +101,9 @@ const LUCK = {
   droughtStart: 6,   // turns without a Yahtzee before drought help kicks in
   droughtMagnet: 0.3,// extra pull toward held matching dice, per drought turn
   droughtPity: 0.2,  // extra best-of-N chance, per drought turn
-  hotStreak: 3,      // turns after a Yahtzee that still get the hot-streak pull
-  hotMagnet: 0.5,    // extra pull toward held matching dice, per turn of streak left
-  hotPity: 0.4,      // extra best-of-N chance, per turn of streak left
+  hotStreak: 4,      // turns after a Yahtzee that still get the hot-streak pull
+  hotMagnet: 0.7,    // extra pull toward held matching dice, per turn of streak left
+  hotPity: 0.55,     // extra best-of-N chance, per turn of streak left
 };
 // Typical score per category, used to judge "good" vs "bad" turns.
 const PAR = {
@@ -780,6 +780,7 @@ if (typeof document !== 'undefined') (function () {
     const upperDone = upperFilled === UPPER_KEYS.length;
     const progEl = $('upperBar').parentElement;
     progEl.classList.remove('near1', 'near2', 'near3');
+    progEl.classList.toggle('on-fire', t.upperBonus > 0);
     if (!t.upperBonus && !upperDone) {
       if (upperPct >= 85) progEl.classList.add('near3');
       else if (upperPct >= 65) progEl.classList.add('near2');
