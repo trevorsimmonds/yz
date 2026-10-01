@@ -841,6 +841,25 @@ if (typeof document !== 'undefined') (function () {
     $('round').textContent = over ? 'Finished' : `Round ${round} / 13`;
     $('streak').hidden = over || !(state.luck && state.luck.hot > 0);
     renderBest();
+
+    // Dice tray catches fire while a hot streak is active, getting hotter
+    // (faster flicker, bigger glow, embers) the more streak turns are left.
+    const hotLevel = over ? 0 : Math.min((state.luck && state.luck.hot) || 0, 4);
+    diceEl.classList.remove('hot1', 'hot2', 'hot3', 'hot4');
+    diceEl.querySelectorAll('.ember').forEach(e => e.remove());
+    if (hotLevel > 0) {
+      diceEl.classList.add('hot' + hotLevel);
+      if (hotLevel >= 3 && !reduceMotion) {
+        const emberCount = hotLevel === 4 ? 3 : 2;
+        for (let i = 0; i < emberCount; i++) {
+          const e = document.createElement('i');
+          e.className = 'ember';
+          e.style.left = (15 + i * (60 / emberCount) + Math.random() * 10) + '%';
+          e.style.animationDelay = (i * 0.4) + 's';
+          diceEl.appendChild(e);
+        }
+      }
+    }
     const rollBtn = $('roll');
     rollBtn.disabled = over || rolling || rollsLeft === 0 || held.every(Boolean) && rolled;
     rollBtn.textContent = over ? 'Game over'
