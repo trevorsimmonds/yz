@@ -417,6 +417,7 @@ if (typeof document !== 'undefined') (function () {
       scores: Object.fromEntries(ALL_KEYS.map(k => [k, null])),
       yahtzeeBonuses: 0,
       luck: newLuck(),
+      yzCount: 0,
     };
   }
   const clone = o => JSON.parse(JSON.stringify(o));
@@ -485,6 +486,16 @@ if (typeof document !== 'undefined') (function () {
   $('themeBtn').addEventListener('click', () => { $('themePicker').hidden = false; });
   $('themeClose').addEventListener('click', () => { $('themePicker').hidden = true; });
   $('themePicker').addEventListener('click', e => { if (e.target.id === 'themePicker') $('themePicker').hidden = true; });
+
+  /* ---------- High score ---------- */
+  let highScore = 0;
+  try { highScore = parseInt(localStorage.getItem('yz-highscore'), 10) || 0; } catch (_) {}
+  function renderBest() {
+    const el = $('bestScore');
+    el.hidden = highScore <= 0;
+    $('bestVal').textContent = highScore;
+  }
+  renderBest();
 
   /* ---------- Confetti-on-roll toggle ---------- */
   let confettiOnRoll = false;
@@ -645,18 +656,41 @@ if (typeof document !== 'undefined') (function () {
     }
   }
 
+  // Every Yahtzee this game is a bigger deal than the last — the banner,
+  // confetti, dice shake, and even a screen flash all escalate with a
+  // running per-game counter, capping out around the 4th so it stays fun
+  // instead of absurd.
+  const YZ_LABELS = ['YAHTZEE!', 'YAHTZEE AGAIN!', 'TRIPLE YAHTZEE!', 'YAHTZEE FRENZY!'];
   function celebrate(bonus) {
     if (reduceMotion) return;
+    state.yzCount = (state.yzCount || 0) + 1;
+    const n = state.yzCount;
+    const lvl = Math.min(n, 4);
     const host = $('bannerHost');
     const banner = document.createElement('div');
-    banner.className = 'banner';
+    banner.className = lvl > 1 ? `banner lvl${lvl}` : 'banner';
+    const label = YZ_LABELS[lvl - 1];
     banner.innerHTML = bonus
-      ? '<span>YAHTZEE!<small>+100 bonus</small></span>'
-      : '<span>YAHTZEE!</span>';
+      ? `<span>${label}<small>+100 bonus</small></span>`
+      : `<span>${label}</span>`;
     host.appendChild(banner);
-    setTimeout(() => banner.remove(), 1650);
-    dieEls.forEach(el => { el.classList.remove('yz'); void el.offsetWidth; el.classList.add('yz'); });
-    burstConfetti({ count: bonus ? 160 : 100 });
+    setTimeout(() => banner.remove(), 1650 + lvl * 120);
+    const dieClass = lvl >= 3 ? 'yz3' : lvl === 2 ? 'yz2' : 'yz';
+    dieEls.forEach(el => {
+      el.classList.remove('yz', 'yz2', 'yz3');
+      void el.offsetWidth;
+      el.classList.add(dieClass);
+    });
+    const count = Math.min(100 + (lvl - 1) * 90, 370);
+    burstConfetti({ count: bonus ? count + 60 : count });
+    if (lvl >= 2) burstConfetti({ count: Math.round(count * .5), x: innerWidth * 0.18, y: innerHeight * 0.25, spread: 70, life: 2200 });
+    if (lvl >= 3) burstConfetti({ count: Math.round(count * .5), x: innerWidth * 0.82, y: innerHeight * 0.25, spread: 70, life: 2200 });
+    if (lvl >= 3) {
+      const flash = $('flashOverlay');
+      flash.classList.remove('show');
+      void flash.offsetWidth;
+      flash.classList.add('show');
+    }
   }
 
   // A light burst from the dice area for the confetti-on-every-roll toggle —
@@ -806,6 +840,7 @@ if (typeof document !== 'undefined') (function () {
     // Header + buttons
     $('round').textContent = over ? 'Finished' : `Round ${round} / 13`;
     $('streak').hidden = over || !(state.luck && state.luck.hot > 0);
+    renderBest();
     const rollBtn = $('roll');
     rollBtn.disabled = over || rolling || rollsLeft === 0 || held.every(Boolean) && rolled;
     rollBtn.textContent = over ? 'Game over'
@@ -844,9 +879,17 @@ if (typeof document !== 'undefined') (function () {
       t.grand >= 300 ? "Fantastic game!" :
       t.grand >= 230 ? "Solid score!" :
       t.grand >= 150 ? "Nice game." : "Better luck next time.";
+    const isNewHigh = t.grand > 0 && t.grand > highScore;
+    if (isNewHigh) {
+      highScore = t.grand;
+      try { localStorage.setItem('yz-highscore', String(highScore)); } catch (_) {}
+      renderBest();
+    }
+    $('newHigh').hidden = !isNewHigh;
     $('goUndo').hidden = !undoSnap;
     $('gameOver').hidden = false;
     $('goNew').focus();
+    if (isNewHigh) burstConfetti({ count: 180 });
     if (reduceMotion) { el.textContent = t.grand; return; }
     const start = performance.now(), dur = 900;
     (function tick(now) {

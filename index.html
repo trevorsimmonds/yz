@@ -23,9 +23,10 @@
           <circle cx="8" cy="16" r="1.8" fill="var(--accent-ink)"/>
           <circle cx="16" cy="16" r="1.8" fill="var(--accent-ink)"/>
         </svg>
-        Yahtzee <span class="ver">v14</span>
+        Yahtzee <span class="ver">v15</span>
       </h1>
       <div class="round" id="round">Round 1 / 13</div>
+      <div class="best" id="bestScore" hidden>🏆 Best <span id="bestVal">0</span></div>
       <div class="streak" id="streak" hidden>🔥 Hot streak</div>
       <div class="spacer"></div>
       <button type="button" class="ghost icon-btn" id="confettiToggle" aria-label="Confetti on every roll" title="Confetti on every roll" aria-pressed="false">
@@ -66,6 +67,7 @@
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="goTitle">
       <h2 id="goTitle">Game over</h2>
       <div class="final" id="finalScore">0</div>
+      <p class="newHigh" id="newHigh" hidden>🏆 New high score!</p>
       <p class="verdict" id="verdict"></p>
       <dl class="breakdown">
         <dt>Upper section</dt><dd id="bdUpper">0</dd>
@@ -92,6 +94,7 @@
 
   <canvas id="confetti" hidden></canvas>
   <div id="bannerHost"></div>
+  <div class="flashOverlay" id="flashOverlay"></div>
 
   <script src="app.js"></script>
 </body>
