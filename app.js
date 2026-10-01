@@ -97,8 +97,8 @@ const LUCK = {
   magnet: 0.25,      // extra weight for helpful faces (0 = fair dice)
   pityStep: 0.3,     // meter gain after a bad turn
   pityBase: 0.15,    // chance of a best-of-N roll even with an empty meter
-  bestOf: 2,         // candidates considered on a pity roll
-  droughtStart: 7,   // turns without a Yahtzee before drought help kicks in (i.e. from round 8)
+  bestOf: 3,         // candidates considered on a pity roll
+  droughtStart: 6,   // turns without a Yahtzee before drought help kicks in
   droughtMagnet: 0.3,// extra pull toward held matching dice, per drought turn
   droughtPity: 0.2,  // extra best-of-N chance, per drought turn
   hotStreak: 3,      // turns after a Yahtzee that still get the hot-streak pull
@@ -785,7 +785,12 @@ if (typeof document !== 'undefined') (function () {
       else if (upperPct >= 65) progEl.classList.add('near2');
       else if (upperPct >= 35) progEl.classList.add('near1');
     }
-    const onPace = upperFilled > 0 && t.upper >= (upperFilled / UPPER_KEYS.length) * 63 - 0.01;
+    // "On pace" is the classic Yahtzee yardstick: the 63 bonus is exactly
+    // three-of-a-kind in every upper box (1+2+...+6, times 3). So the bar
+    // you need to clear for each box you've filled is 3x its face value,
+    // not an even 1/6th share of 63 regardless of which boxes are done.
+    const parSoFar = UPPER.reduce((a, [k, , face]) => a + (scores[k] !== null ? face * 3 : 0), 0);
+    const onPace = upperFilled > 0 && t.upper >= parSoFar - 0.01;
     progEl.classList.toggle('on-pace', !t.upperBonus && !upperDone && onPace);
     const pacePill = $('pacePill');
     pacePill.hidden = over || t.upperBonus > 0 || upperDone || upperFilled === 0 || !onPace;
